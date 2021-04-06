@@ -1,0 +1,359 @@
+<html>
+    <head>
+        <title>HTTP API TV PROGRAM</title>
+        <script>
+            const {ipcRenderer} = require("electron");
+            const JOUR = ["Lundi","Mardi","Mercredi","Jeudi","Vendredi","Samedi","Dimanche"], PPM = Math.round(200/60), HOUR8=8, HOUR4=4;
+            var DATA = {"init":"","progs":[],"debut":"2020-10-15 16:00","fin":"2020-10-15 23:59","chaines":"","append":true, "filters":{}},  EMPTYSB = "";
+            function extractDayOfYear(d) { return  d.getFullYear()+"-"+(d.getMonth()+1).toString()+"-"+d.getUTCDate();}
+            function extractTime(d) { return d.getHours().toString().padStart(2,"0") +":"+d.getUTCMinutes().toString().padStart(2,"0");}
+            function getDuree(debut,fin) {
+                let d = Date.parse(debut), f= Date.parse(fin), bas = Date.parse(DATA.debut), haut= Date.parse(DATA.fin);
+                d = (bas>d) ? bas : d; f = (haut<f) ? haut : f;
+                return Math.round((f-d)/1000/60);
+            }
+            let Canvas = {
+                littleCross : (sz=40) => {
+                    let pt1 = Math.round(sz*0.15), pt2 = sz-(pt1*2);
+                    let cv = document.createElement("canvas"), ctx = cv.getContext("2d");
+                    cv.width = sz; cv.height = sz;
+                    ctx.lineWidth="4px";  ctx.lineCap="round";
+                    ctx.moveTo(pt1,pt1); ctx.lineTo(pt2,pt2);  ctx.moveTo(pt1,pt2); ctx.lineTo(pt2,pt1);
+                    ctx.stroke();
+                    return cv.toDataURL();
+                },
+                greaterThan : (sz=40) => {
+                    let pt1 = Math.round(sz*0.20), mid = sz/2, mid2 = mid+pt1;
+                    let cv = document.createElement("canvas"), ctx = cv.getContext("2d");
+                    cv.width = sz; cv.height = sz;
+                    ctx.lineWidth=Math.round(sz/10);  ctx.lineCap="round"; ctx.strokeStyle="white";
+                    ctx.moveTo(0,0); ctx.lineTo(mid,mid); ctx.lineTo(0,sz);
+                    ctx.moveTo(pt1,0); ctx.lineTo(mid2,mid); ctx.lineTo(pt1,sz);
+                    
+                    ctx.stroke();
+                    return cv.toDataURL();
+                }
+            }
+            var Draw = {
+                opt : (select_id,optid,optname) => {
+                    let opt =  document.createElement("option");
+                    opt.value=optid; opt.innerText=optname;
+                    document.getElementById(select_id).add(opt);
+                },
+                btn : (container_id,butid,butname) => {
+                    let btn =  document.createElement("button");
+                    btn.id=butid;  btn.innerText=butname;  btn.bouquets= (container_id=="bouquets") ? true:false;
+                    btn.addEventListener("click",switchBouquets);
+                    document.getElementById(container_id).appendChild(btn);
+                },
+                filterBtn : (container_id,butid,butname) => {
+                    let btn =  document.createElement("button");
+                    btn.id=butid;
+                    btn.innerText=butname;
+                    btn.className="checkbox";
+                    btn.addEventListener("click",(e)=>{
+                        if (e.target.className=="checkbox_active") {
+                            e.target.className="checkbox";
+                            DATA.filters[e.target.id] = false;
+                        }
+                        else {
+                            e.target.className="checkbox_active";
+                            DATA.filters[e.target.id] = true;
+                        }
+                    });
+                    document.getElementById(container_id).appendChild(btn);
+                },
+                progBox : (parent,el,sum) => {
+                    const obj = (typ) => document.createElement(typ);
+                    var p,res;
+                    if (document.getElementById("e"+el.id_emission))
+                        res = document.getElementById("e"+el.id_emission);
+                    else {
+                        p = obj("div");
+                        
+                        p.id="e"+el.id_emission;
+                        p.setAttribute("chaine",el.id_chaine);
+                        p.setAttribute("genre",el.id_genre);
+                        p.setAttribute("onClick","SideBar.show(this)"); //p.addEventListener("click",(ev)=>showSideBar(ev),false); 
+                        let hor = obj("div"), title = obj("span"), duree = obj("span"), genre = obj("div"), sous = obj("span");
+                        hor.innerText = el.horaire.debut.split(" ")[1]+" ";
+                        title.innerText=el.titre;  hor.appendChild(title);
+                        duree.innerText=" ("+el.duree+"min)";  hor.appendChild(duree);
+                        sous.innerText=el.soustitre;  genre.innerText=el.genre_specifique;
+                        p.appendChild(hor); p.appendChild(genre); p.appendChild(sous);
+                        //p.innerHTML="<div>"+el.horaire.debut.split(" ")[1]+" <span style='font-weight:bold'>"+el.titre +"</span> ("+el.duree+"min)</div><div>"+el.genre_specifique+"</div><span style='font-style:italic'>"+el.soustitre+"</span>";
+                        p.className="prog";
+                        p.style.height= Math.round(el.duree * PPM) + "px";
+                        p.style.color="grey";
+                        
+                        res = parent.appendChild(p);        
+                    }
+                    return res;
+                }
+            }
+            /*****************
+             * SideBar *******
+             * **************/
+            var SideBar = {
+                show : (t) => {
+                    let id = t.id, info = DATA.prog.donnees.find(i=>i.id_emission==id.toString().split("e")[1]);
+                    var elem = document.getElementById("sidebar"),  elClose = document.getElementById("sb_close");
+                    EMPTYSB = elem.innerHTML;
+                    
+                    document.getElementById("sb_head").innerText=info.horaire.debut + " - " + info.horaire.fin;
+                    document.getElementById("sb_title").innerHTML=info.titre;
+                    document.getElementById("sb_thumb").innerHTML="<img src='"+info.vignettes.grande+"' width='372' />";
+                    let txtFlags = "<div>VM : "+info.flags.est_vm +"</div>" /* est_vm est_inedit est_direct est_hd note_telerama has_replay genre_specifique */
+                                + "<div>Inédit : "+info.flags.est_inedit+"</div>"
+                                + "<div>Direct : "+info.flags.est_direct+"</div>"
+                                + "<div>HD : "+info.flags.est_hd+"</div>"
+                                + "<div>Replay : "+((info.replay) ? "true" : "false") +"</div>"
+                                + "<div>Note Télérama : "+ info.note_telerama+"</div>";
+                    document.getElementById("sb_misc").innerHTML=txtFlags;
+                    document.getElementById("sb_desc").innerHTML=info.genre_specifique;
+                    if (info.series!=null) document.getElementById("sb_desc").innerHTML+= info.series.episode;
+                    document.getElementById("sb_summary").innerHTML=info.resume;
+                    
+                    elClose.addEventListener("click",SideBar.hide);
+                    elClose.style.background="url('"+Canvas.greaterThan(100)+"') center / 20px  no-repeat";
+                    elem.style.width="30vmax"; elem.style.borderWidth="3px 0 3px 15px"; elClose.style.display="block";
+                },
+                hide : (e) => {
+                    let elem = e.currentTarget.parentNode;
+                    elem.style.width=0;  elem.style.borderWidth="0";
+                    e.currentTarget.style.display="none";
+                    elem.innerHTML=EMPTYSB;
+                }
+            }
+            /*****************
+             * Events ********
+             * **************/
+            function toggleDetails(e) {
+                let el = document.getElementById("filter_details");
+                if (el.style.display=="none") el.style.display="grid"; else el.style.display="none";
+            }
+            var popinTimeout = null;
+            function toggleTimeOfDay(e) {
+                var popin = null;
+                let bas = Date.parse(DATA.debut), haut= Date.parse(DATA.fin);
+                let dt = new Date(bas + Math.round(e.target.scrollTop / PPM)*60000);
+                let hourDisp = document.getElementById("hour_disp");
+                hourDisp.innerText= JOUR[dt.getUTCDay()] +" "+dt.getUTCDate()+" - "+dt.getHours().toString().padStart(2,"0")+":"+dt.getUTCMinutes().toString().padStart(2,"0");
+                if (hourDisp.style.visibility=="hidden") {
+                    hourDisp.style.visibility="visible"; 
+                    popinTimeout = setTimeout(()=> { hourDisp.style.visibility="hidden"; }, 5000);
+                }
+                else if (popinTimeout==null) hourDisp.style.visibility="hidden";
+            }
+            var scrollTimeout = null;
+            function scrollHandle(e) {
+                
+                let last= (extractTime(new Date(DATA.fin))=="23:59") ? new Date(Date.parse(DATA.fin)+60000) : new Date(DATA.fin);
+                if (e.target.scrollTop>e.target.scrollHeight-e.target.offsetHeight&&document.getElementById("load").style.visibility!="visible") {
+                    document.getElementById("load").style.visibility="visible";
+                    let d4 = new Date(Date.parse(last)+HOUR8*3600000), dfin = extractTime(d4);
+                    ipcRenderer.send("init_grid",{"date":extractDayOfYear(last),"debut":extractTime(last),"fin":dfin});
+                    DATA.fin = dfin;
+                }
+                    
+            }
+            function switchBouquets(e){
+                if (e.target.id=="bouquets")  DATA.chaines = DATA.init.donnees.bouquets.find(_=>_.id==parseInt(e.target.value)).chaines;
+                else DATA.chaines = DATA.init.donnees.categories.find(_=>_.id==parseInt(e.target.id)).chaines;
+                DATA.append=false;
+                console.log("Chaines :"+DATA.chaines.join("/"))
+                ipcRenderer.send("init_grid",{"date":extractDayOfYear(DATA.debut),"debut":extractTime(DATA.debut),"fin":extractTime(DATA.fin),"chaine":DATA.chaines});
+            }
+            var Filter = {
+                remove : (t) => { t.parentNode.removeChild(t); },
+                add : (e) => {
+                    let el = e.target,val = el.value, type = el.getAttribute("typ"); 
+                    var internalList;
+                    if (el.id=="genres_spec") 
+                        internalList = DATA.prog.donnees.map(_=>_.genre_specifique).filter(_=>_==val).filter((v,i,s)=> s.indexOf(v) === i);
+                    else 
+                        internalList = DATA.init.donnees[el.id].filter(_=>_.id==val);
+                    
+                    internalList.forEach(_=>{
+                        let filterBox = document.createElement("span");
+                        filterBox.id+=val+","; filterBox.cat=type; filterBox.className="filter_box";
+                        filterBox.style.background="url('"+ Canvas.littleCross(20) +"') no-repeat top right, lightblue";
+                        filterBox.innerHTML=type+" : "+el.options[el.selectedIndex].innerText;
+                        filterBox.setAttribute("onclick","Filter.remove(this)");
+                        document.getElementById("filter_boxes").appendChild(filterBox);
+                    });
+                },
+                apply : (e) => { ///TODO
+                    [...document.querySelectorAll(".filter_box")].forEach(_=>{
+                        switch(_.cat) {
+                            case "Genres Spécifiques": DATA.filters.genres_spec.push(_.id); break;
+                            case "Genres": DATA.filters.genre.push(_.id);
+                        }
+                    });
+                    var filtered = [...document.querySelectorAll(".prog")].filter(p=> (DATA.filters.chaine|[]).some(c=>c==p.chaine_id) && (DATA.filters.genre|[]).some(g=>p.genre_id));
+                    filtered.forEach(_=> _.style.backgroundColor="yellow");
+                }
+            }
+            /***********************
+             *  API CALL ***********
+             * ********************/
+            
+            function grid() {
+                let grid = document.getElementById("grid"), content = document.getElementById("content");
+                let bas = Date.parse(DATA.debut), haut= Date.parse(DATA.fin);
+                let listChannel = (DATA.chaines) ? DATA.chaines : DATA.init.donnees.bouquets.filter(_=>_.nom=="TNT")[0].chaines;
+                if (!DATA.append) grid.innerHTML="";
+                listChannel.forEach((c,i)=>{
+                    var tab;
+                    if (document.getElementById("c"+c))  
+                        tab = document.getElementById("c"+c);
+                    else {
+                        tab = document.createElement("div");
+                        let col = i+1, tit = "<div class='chan_header'><img src='"+DATA.init.donnees.chaines.find(_=>_.id==c).logo+"'  /></div>";
+                        tab.id="c"+c;
+                        tab.style.gridColumn= col + "/" + col;
+                        tab.innerHTML+=tit;
+                    }
+                    let progList = DATA.prog.donnees.filter(p=> p.id_chaine==c).map(el=> {return { "duree" : getDuree(el.horaire.debut,el.horaire.fin), ...el };});
+                    var totalDuree = progList.reduce((a,i)=>a+i.duree,0);
+                    grid.appendChild(tab);
+                    progList.map(el=> Draw.progBox(tab,el,totalDuree) );
+                    DATA.prog.donnees.map(_=>_.genre_specifique).forEach(_=>Draw.opt("genres_spec",_,_));
+                    
+                });
+                DATA.append=true;
+                let snappadding = document.querySelector("div.chan_header").offsetHeight-2,snaptreshold = PPM*60,snapcount = HOUR8; // headerpad = document.querySelector("div.chan_header").offsetHeight-2;
+                content.innerHTML+=[...Array(snapcount+1).keys()].map(_=> "<div class='snapanchor' style='top:"+(snappadding+_*snaptreshold)+"px; height:"+snaptreshold+"px'></div>").join("");
+            }
+            function init() {
+                let d = new Date(Date.now()), d4 = new Date(Date.now()+HOUR8*3600000), dateday = extractDayOfYear(d), debut = d, fin = d4;
+                DATA.debut = debut; DATA.fin = (d4.getDate()>d.getDate()) ? new Date(dateday+" 23:59") : fin;
+                
+                ipcRenderer.on("init",(e,a)=>{ 
+                    DATA.init=a;   //console.log({"date":dateday,"debut":extractTime(DATA.debut),"fin":extractTime(DATA.fin)});
+                    a.donnees.bouquets.forEach(_=>Draw.opt("bouquets",_.id,_.nom));
+                    a.donnees.categories.forEach(_=>Draw.btn("categories",_.id,_.nom));
+                    a.donnees.genres.forEach(_=>Draw.opt("genres",_.id,_.libelle));
+                    Draw.filterBtn("divers","est_vm","Version Multilingue"); 
+                    Draw.filterBtn("divers","est_hd","HD");
+                    Draw.filterBtn("divers","est_inedit","Inédit"); 
+                    Draw.filterBtn("divers","est_direct","Direct");  
+                    Draw.filterBtn("divers","has_replay","Replay");
+                    ipcRenderer.send("init_grid",{"date":dateday,"debut":extractTime(DATA.debut),"fin":extractTime(DATA.fin)});
+                });
+                ipcRenderer.on("init_grid",(e,a)=>{ DATA.progs.push(a); DATA.prog=DATA.progs[DATA.progs.length-1];  grid(); });
+                
+                document.getElementById("filter_bar").addEventListener("click",toggleDetails);
+                document.querySelectorAll("select").forEach(_=>{ if (_.id=="bouquets") _.addEventListener("change",switchBouquets); else _.addEventListener("change",Filter.add)});
+                document.getElementById("apply").addEventListener("click",Filter.apply);
+                document.getElementById("content").addEventListener("scroll",(e)=> { toggleTimeOfDay(e); if (scrollTimeout) clearTimeout(scrollTimeout); scrollTimeout=setTimeout(()=>scrollHandle(e),2000); },false);
+                
+                ipcRenderer.send("init");   
+            }
+            
+        </script>
+        <style>
+            body { font-family: 'Lucida Sans', Verdana, sans-serif; font-size:smaller; color:#fceed1;}
+            #body { height:100%; width:100%; display: flex; flex-flow: column; }
+
+            /** Filtres */
+            #filters { background-color:#fceed1; border:1px solid #12343b; border-radius:10px; color:#12343b; margin-bottom:5px; }
+            #filter_bar {background-color:#2d545e; color:#fceed1; font-size:larger; padding:0.3em; cursor:pointer;}
+            #filter_bar > span {float:right; font-weight:bold; margin-right:5px;}
+            #filter_details {display:grid; grid-template-columns: 1fr 1fr 1fr;}
+            #filter_boxes {margin:10px; width:100%;}
+            .filter_box {background-color:lightblue; color:black; border-radius:5px; margin:5px; flex:1; padding:2px 25px 2px 2px;}
+            #bouquets {display:inline-flex; width:100%;}
+            #genres,#genres_spec { height:200px; width:80%;}
+
+            select {background-color:transparent; border:1px solid #fceed1; overflow: auto; color: #12343b; font-size:15px; font-weight:bold;}
+            select > option {border-radius:10px; color: #2d545e; padding-left:0.5em; font-size:12px; font-weight:bold;}
+            select > option:active {background-color:lightblue; text-decoration: none;}
+            select::-webkit-scrollbar { width: 12px;}
+            select::-webkit-scrollbar-track { box-shadow: inset 0 0 6px rgba(173,216,230, 0.5); border-radius: 10px;}
+            select::-webkit-scrollbar-thumb { box-shadow: inset 0 0 6px  rgba(173,216,230, 0.8); border-radius: 10px;}
+
+            /** Button */
+            button {background-color:#2d545e; border:1px solid darkslateblue; border-radius:5px; color:#fceed1; font-weight: bold; font-size:12px; padding:0.4em;}
+            button:hover { border:1px solid lightblue;}
+            #apply  {font-size:20px; float:right; margin:5px 5px 5px auto; padding:0.3em; color:#c80e13}
+            #bouquets > button {  border-radius:5px; margin:5px; flex:auto} /*:rgb(117, 117, 151)*/
+            #categories > button {  border-radius:5px; margin:5px; flex:auto; }
+            #categories > button:hover { border:1px solid lightblue;}
+            #divers > button {flex:auto}
+            button.checkbox {  border-radius:5px; margin:5px; flex:auto}
+            button.checkbox_active {background-color:darkslateblue; color:white; border-radius:5px; margin:5px; flex:auto; box-shadow: inset 3px 3px 5px 0px rgba(50, 50, 50, 0.75);}
+            
+            /** content grid div */
+            #content {background-color:white; overflow:scroll; scroll-behavior: smooth; position:relative; scroll-snap-type: block proximity; height:100%;}
+            #content > img {visibility:hidden; margin-left:40%;} /*margin:20px 0 10px 860px;*/
+            #grid { display:grid; grid-gap:1%;   grid-template-columns:repeat(100,10vmax); overflow:visible}  
+            #grid > div {border:1px solid blue; border-radius:5px; color:black;  background-color: white; height:fit-content; }
+            /** channels and programs div */
+            .chan_header {border-bottom:1px solid lightblue; width:100%; position: -webkit-sticky; position: sticky; top:4px; background-color: white;}
+            .chan_header > img {width:48px; height:48px;  margin:0px auto 0px auto; display:block;}
+            .prog { border-bottom:1px solid lightblue; overflow:hidden}
+            .prog > div:nth-child(1) {margin-top:2px;}
+
+            /** scroll snaping behavior */
+            .snapanchor {position:absolute; visibility: hidden; scroll-snap-align: start;}
+            .snapheader {position:absolute; visibility: hidden; scroll-snap-align: end;}
+            #load {transition: visibility 1s;}
+            /* est_vm est_inedit est_direct est_hd note_telerama has_replay genre_specifique */
+
+            /** side bar */
+            #sidebar {position:absolute; right:0px; width:0; height:98vh; 
+            background-color: white; color:black; 
+            border-width:0; border-style: solid; border-color: #7d3cff; border-radius: 5px 0 0 5px;
+            border-image-outset: 0 0 0 0 0 0 0 45%;
+            transition: width 0.5s;}
+            #sb_head {background-color:#7d3cff; color:white; text-align: center;}
+            #sb_close {position:relative; top:-98vh; left:-12px; width:12px; height:99vh; display:none;  }
+            #sb_body {display:grid; height:fit-content; width:95%; margin:3%;}
+            #sb_title {grid-column:1/3; grid-row:1; font-size:larger; font-weight: bold;}
+            #sb_desc {grid-column:1/3; grid-row:2}
+            #sb_thumb {grid-column:1; grid-row:3}
+            #sb_misc  {grid-column:2; grid-row:3}
+            #sb_summary {grid-column:1/3; grid-row:4; text-align: justify; margin:10px;}
+            #sb_nextdif {grid-column:1/3; grid-row:5;}
+        </style>
+    </head>
+    <body onload="init()">
+        <div id="body">
+            <div id="filters">
+                <div id="filter_bar" >Filtres<span id="hour_disp"></span></div>
+                <div id="filter_details" >
+                    <div style="grid-column:1/4; grid-row:1"><div>Bouquets</div><select size=1 id="bouquets" typ="Bouquets"></select></div>
+                    <div style="grid-column:1/4; grid-row:2"><div>Catégories</div><div id="categories" style=" text-align:center;"></div></div>
+                    <div style="grid-column:1; grid-row:3"><div>Genres</div><select size=8 id="genres" typ="Genres" multiple="false"></select></div>
+                    <div style="grid-column:2; grid-row:3"><div>Genres spécifiques</div><select size=8 id="genres_spec" typ="Genres Spéc." multiple="false"></select></div>
+                    <div style="grid-column:3; grid-row:3"><div>Divers</div><div id="divers" typ="Divers"></div></div>
+                    <div style="grid-column:1/4; grid-row:4" id="filter_boxes"></div>
+                    <div style="grid-column:3; grid-row:5" style="text-align:center"><button id="apply">Appliquer</button></div>
+                </div>
+            </div>
+            <div id="content">
+                <div id="grid"></div>
+                <img id="load" src="http://cdn.lowgif.com/full/4df2a4acc42f3590-.gif" width="560"  height="420" />
+
+
+            </div>
+            <div id="sidebar">
+                
+                <div id="sb_head"></div>
+                <div id="sb_body">
+                    <div id="sb_title"></div>
+                    <div id="sb_desc"></div>
+                    <div id="sb_thumb"></div>
+                    <div id="sb_misc"></div>
+                    
+                    
+                    <div id="sb_summary"></div>
+                    <!--<div id="sb_nextdif"></div>//-->
+                </div>
+                <div id="sb_close"></div>
+            </div>
+        </div>
+
+    </body>
+</html>

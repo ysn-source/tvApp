@@ -1,0 +1,27 @@
+{
+  "name": "geoApp",
+  "version": "0.1.0",
+  "main": "main.js",
+  "scripts": {
+    "start": "electron .",
+    "build": {
+      "extraResourcePath": [
+        "e://latest-progs.txt"
+      ]
+    }
+  },
+  "author": "",
+  "license": "GPL",
+  "description": "",
+  "devDependencies": {
+    "electron-builder": "^22.9.1",
+    "fast-zlib": "^1.0.2"
+  },
+  "dependencies": {
+    "encoding": "^0.1.13",
+    "jsdom": "^16.2.2",
+    "jsonpath": "^1.0.2",
+    "node-fetch": "2.6.1",
+    "sqlite3": "^5.0.0"
+  }
+}
